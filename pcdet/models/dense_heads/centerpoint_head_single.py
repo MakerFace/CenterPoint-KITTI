@@ -2,6 +2,8 @@ import torch
 import numpy as np
 import torch.nn as nn
 from ...utils import box_coder_utils, common_utils, loss_utils
+from ...ops.iou3d_nms import iou3d_nms_utils
+import math
 
 from functools import partial
 from six.moves import map, zip
@@ -25,6 +27,7 @@ def multi_apply(func, *args, **kwargs):
     map_results = map(pfunc, *args)
     return tuple(map(list, zip(*map_results)))
 
+# TODO loss function
 class CenterHead(nn.Module):
     def __init__(self, model_cfg, input_channels, num_class, class_names, grid_size, point_cloud_range,
                  predict_boxes_when_training=True):
@@ -384,8 +387,10 @@ class CenterHead(nn.Module):
         code_weights = self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['code_weights']
         bbox_weights = mask * mask.new_tensor(code_weights)
         
-        loc_loss = l1_loss(
-            pred, target_box, bbox_weights, avg_factor=(num + 1e-4))
+        # TODO change l1_loss to CIoU_3d
+        # loc_loss = l1_loss(
+            # pred, target_box, bbox_weights, avg_factor=(num + 1e-4))
+        loc_loss = ciou_3d(pred, target_box)
 
         loc_loss = loc_loss * self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['loc_weight']
         box_loss = loc_loss
@@ -602,6 +607,7 @@ def weight_reduce_loss(loss, weight=None, reduction='mean', avg_factor=None):
     """
     # if weight is specified, apply element-wise weight
     if weight is not None:
+        print(weight.shape)
         loss = loss * weight
 
     # if avg_factor is not specified, just reduce the loss
@@ -698,3 +704,42 @@ def l1_loss(pred, target):
     assert pred.size() == target.size() and target.numel() > 0
     loss = torch.abs(pred - target)
     return loss
+
+@weighted_loss
+def ciou_3d(pred, target):
+    """CIoU_3d.
+
+    Args:
+        pred (torch.Tensor(B,N,8)): The prediction.
+                             只使用前7维度(N, 7) [x, y, z, dx, dy, dz, heading]
+                             x,y,z是中心点坐标 dx,dy,dz是长宽高 heading是航向角
+        target (torch.Tensor(B,N,8)): The learning target of the prediction.
+    
+    Returns:
+        torch.Tensor: Calculated loss.
+    """
+    # (B*N,8)
+    b = pred.shape[0]
+    n = pred.shape[1]
+    pred = pred.reshape(-1, 8)
+    target = target.reshape(-1, 8)
+
+    iou3d, out_height = iou3d_nms_utils.box_iou3d_gpu(pred[:, 0:7], target[:, 0:7])
+
+    # bev视角下可以包围pred和gt最小的矩形框
+    out_max_xy = torch.maximum(pred[..., 0:2], target[..., 0:2])
+    out_min_xy = torch.minimum(pred[..., 0:2], target[..., 0:2])
+    out_xy = out_max_xy - out_min_xy
+    diag_2d = torch.clamp((out_xy), min=0)
+    # BUG RuntimeError: one of the variables needed for gradient computation has been modified by an inplace operation
+    # 改变了out_max_xy out_min_xy
+    diag_3d_2 = diag_2d[..., 0].square() + diag_2d[..., 1].square() + out_height.square() # 通过bev对角线计算体对角线
+
+    with torch.no_grad():
+        # 预测框和真值框中心点的距离平方与体对角线的比值
+        p1 = torch.sum(torch.square(pred[..., 0:3] - target[..., 0:3])) / diag_3d_2
+        p2 = 4/math.pi**2*(torch.arctan(pred[..., 3]/pred[..., 4]) - torch.arctan(target[..., 3]/target[..., 4].clamp_(1e-6))).square()
+        p3 = 4/math.pi**2*(pred[..., 6] - target[..., 6]).square()
+    
+    loc_loss = 1 - iou3d + p1 + p2 + p3
+    return loc_loss.reshape(b, n, -1)

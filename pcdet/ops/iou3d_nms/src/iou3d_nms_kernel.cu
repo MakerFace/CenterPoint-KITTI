@@ -248,6 +248,21 @@ __global__ void boxes_overlap_kernel(const int num_a, const float *boxes_a, cons
     ans_overlap[a_idx * num_b + b_idx] = s_overlap;
 }
 
+// TODO per-box box_overlap
+__global__ void box_overlap_kernel(const int num, const float *boxes_a, const float *boxes_b, float *ans_overlap){
+    // params boxes_a: (N, 7) [x, y, z, dx, dy, dz, heading]
+    // params boxes_b: (N, 7) [x, y, z, dx, dy, dz, heading]
+    const int idx = blockIdx.x * THREADS_PER_BLOCK + threadIdx.x;
+
+    if (idx >= num){
+        return;
+    }
+    const float * cur_box_a = boxes_a + idx * 7;
+    const float * cur_box_b = boxes_b + idx * 7;
+    float s_overlap = box_overlap(cur_box_a, cur_box_b);
+    ans_overlap[idx] = s_overlap;
+}
+
 __global__ void boxes_iou_bev_kernel(const int num_a, const float *boxes_a, const int num_b, const float *boxes_b, float *ans_iou){
     // params boxes_a: (N, 7) [x, y, z, dx, dy, dz, heading]
     // params boxes_b: (M, 7) [x, y, z, dx, dy, dz, heading]
@@ -262,6 +277,21 @@ __global__ void boxes_iou_bev_kernel(const int num_a, const float *boxes_a, cons
     const float * cur_box_b = boxes_b + b_idx * 7;
     float cur_iou_bev = iou_bev(cur_box_a, cur_box_b);
     ans_iou[a_idx * num_b + b_idx] = cur_iou_bev;
+}
+
+// TODO pre-box box_iou_bev
+__global__ void box_iou_bev_kernel(const int num, const float *boxes_a, const float *boxes_b, float *ans_iou) {
+    // params boxes_a: (N, 7) [x, y, z, dx, dy, dz, heading]
+    // params boxes_b: (N, 7) [x, y, z, dx, dy, dz, heading]
+    const int idx = blockIdx.y * THREADS_PER_BLOCK + threadIdx.y;
+
+    if (idx >= num){
+        return;
+    }
+    const float * cur_box_a = boxes_a + idx * 7;
+    const float * cur_box_b = boxes_b + idx * 7;
+    float cur_iou_bev = iou_bev(cur_box_a, cur_box_b);
+    ans_iou[idx] = cur_iou_bev;
 }
 
 __global__ void nms_kernel(const int boxes_num, const float nms_overlap_thresh,
@@ -386,6 +416,18 @@ void boxesoverlapLauncher(const int num_a, const float *boxes_a, const int num_b
 #endif
 }
 
+// TODO pre-box iou overlap
+void boxoverlapLauncher(const int num, const float *boxes_a, const float *boxes_b, float *ans_overlap){
+
+    dim3 blocks(DIVUP(num, THREADS_PER_BLOCK));
+    dim3 threads(THREADS_PER_BLOCK);
+
+    box_overlap_kernel<<<blocks, threads>>>(num, boxes_a, boxes_b, ans_overlap);
+#ifdef DEBUG
+    cudaDeviceSynchronize();  // for using printf in kernel function
+#endif
+}
+
 void boxesioubevLauncher(const int num_a, const float *boxes_a, const int num_b, const float *boxes_b, float *ans_iou){
 
     dim3 blocks(DIVUP(num_b, THREADS_PER_BLOCK), DIVUP(num_a, THREADS_PER_BLOCK));  // blockIdx.x(col), blockIdx.y(row)
@@ -397,6 +439,18 @@ void boxesioubevLauncher(const int num_a, const float *boxes_a, const int num_b,
 #endif
 }
 
+
+// TODO pre-box iou bev
+void boxioubevLauncher(const int num, const float *boxes_a, const float *boxes_b, float *ans_iou){
+
+    dim3 blocks(DIVUP(num, THREADS_PER_BLOCK));
+    dim3 threads(THREADS_PER_BLOCK);
+
+    box_iou_bev_kernel<<<blocks, threads>>>(num, boxes_a, boxes_b, ans_iou);
+#ifdef DEBUG
+    cudaDeviceSynchronize();  // for using printf in kernel function
+#endif
+}
 
 void nmsLauncher(const float *boxes, unsigned long long * mask, int boxes_num, float nms_overlap_thresh){
     dim3 blocks(DIVUP(boxes_num, THREADS_PER_BLOCK_NMS),

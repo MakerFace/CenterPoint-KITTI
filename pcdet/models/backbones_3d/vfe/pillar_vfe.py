@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import random
 
 from .vfe_template import VFETemplate
 
@@ -94,6 +95,20 @@ class PillarVFE(VFETemplate):
     def forward(self, batch_dict, **kwargs):
   
         voxel_features, voxel_num_points, coords = batch_dict['voxels'], batch_dict['voxel_num_points'], batch_dict['voxel_coords']
+
+        # TODO 随机丢弃体素内的点
+        # voxel_feature N,32,4 N=pillars, 32=points per pillar, 4=dims of point
+        P = voxel_features.shape[0]
+        N = voxel_features.shape[1]
+        drop_rate = 0.15
+        voxel_mask = torch.rand((P, N, 1)) > drop_rate # 均匀分布，选中概率大于0.5的
+        voxel_num_points = torch.sum(voxel_mask, dim=1)
+        voxel_features = voxel_features * voxel_mask # 选中的点保持不变，未选中的点置为0
+
+        # TODO 需要改变batch_dict
+        batch_dict['voxels'] = voxel_features
+        batch_dict['voxel_num_points'] = voxel_num_points
+
         points_mean = voxel_features[:, :, :3].sum(dim=1, keepdim=True) / voxel_num_points.type_as(voxel_features).view(-1, 1, 1)
         f_cluster = voxel_features[:, :, :3] - points_mean
 

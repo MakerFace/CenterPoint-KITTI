@@ -39,9 +39,11 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=t
 
 const int THREADS_PER_BLOCK_NMS = sizeof(unsigned long long) * 8;
 
-
+// TODO add launcher definition
 void boxesoverlapLauncher(const int num_a, const float *boxes_a, const int num_b, const float *boxes_b, float *ans_overlap);
+void boxoverlapLauncher(const int num, const float *boxes_a, const float *boxes_b, float *ans_overlap);
 void boxesioubevLauncher(const int num_a, const float *boxes_a, const int num_b, const float *boxes_b, float *ans_iou);
+void boxioubevLauncher(const int num, const float *boxes_a, const float *boxes_b, float *ans_iou);
 void nmsLauncher(const float *boxes, unsigned long long * mask, int boxes_num, float nms_overlap_thresh);
 void nmsNormalLauncher(const float *boxes, unsigned long long * mask, int boxes_num, float nms_overlap_thresh);
 
@@ -67,6 +69,27 @@ int boxes_overlap_bev_gpu(at::Tensor boxes_a, at::Tensor boxes_b, at::Tensor ans
     return 1;
 }
 
+// TODO pre-box overlap_bev
+int box_overlap_bev_gpu(at::Tensor boxes_a, at::Tensor boxes_b, at::Tensor ans_overlap){
+    // params boxes_a: (N, 7) [x, y, z, dx, dy, dz, heading]
+    // params boxes_b: (N, 7) [x, y, z, dx, dy, dz, heading]
+    // params ans_overlap: (N)
+
+    CHECK_INPUT(boxes_a);
+    CHECK_INPUT(boxes_b);
+    CHECK_INPUT(ans_overlap);
+
+    int num = boxes_a.size(0);
+
+    const float * boxes_a_data = boxes_a.data<float>();
+    const float * boxes_b_data = boxes_b.data<float>();
+    float * ans_overlap_data = ans_overlap.data<float>();
+
+    boxoverlapLauncher(num, boxes_a_data, boxes_b_data, ans_overlap_data);
+
+    return 1;
+}
+
 int boxes_iou_bev_gpu(at::Tensor boxes_a, at::Tensor boxes_b, at::Tensor ans_iou){
     // params boxes_a: (N, 7) [x, y, z, dx, dy, dz, heading]
     // params boxes_b: (M, 7) [x, y, z, dx, dy, dz, heading]
@@ -83,6 +106,26 @@ int boxes_iou_bev_gpu(at::Tensor boxes_a, at::Tensor boxes_b, at::Tensor ans_iou
     float * ans_iou_data = ans_iou.data<float>();
 
     boxesioubevLauncher(num_a, boxes_a_data, num_b, boxes_b_data, ans_iou_data);
+
+    return 1;
+}
+
+// TODO pre-box iou_bev
+int box_iou_bev_gpu(at::Tensor boxes_a, at::Tensor boxes_b, at::Tensor ans_iou){
+    // params boxes_a: (N, 7) [x, y, z, dx, dy, dz, heading]
+    // params boxes_b: (M, 7) [x, y, z, dx, dy, dz, heading]
+    // params ans_overlap: (N, M)
+    CHECK_INPUT(boxes_a);
+    CHECK_INPUT(boxes_b);
+    CHECK_INPUT(ans_iou);
+
+    int num = boxes_a.size(0);
+
+    const float * boxes_a_data = boxes_a.data<float>();
+    const float * boxes_b_data = boxes_b.data<float>();
+    float * ans_iou_data = ans_iou.data<float>();
+
+    boxioubevLauncher(num, boxes_a_data, boxes_b_data, ans_iou_data);
 
     return 1;
 }
